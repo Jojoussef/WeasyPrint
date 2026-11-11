@@ -16,7 +16,7 @@ from ..css import resolve_math
 from ..css.functions import check_math
 from ..css.validation import validate_non_shorthand
 from ..formatting_structure import boxes
-from ..text.line_break import can_break_text, split_first_line
+from ..text.line_break import can_break_text, min_content_line_widths, split_first_line
 from .replaced import default_image_sizing
 
 
@@ -354,17 +354,32 @@ def inline_line_widths(context, box, outer, is_line_start, minimum, skip_stack=N
             if is_line_start and space_collapse:
                 child_text = child_text.lstrip(b' ')
             max_width = 0 if minimum else None
+            letter_spacing = child.style['letter_spacing']
+            can_char_wrap = (
+                minimum and not first_line and text_wrap and space_collapse and
+                not child.style['word_spacing'] and
+                not child.justification_spacing and
+                (letter_spacing == 'normal' or letter_spacing >= 0) and
+                (child.style['font_size'] or letter_spacing not in ('normal', 0)) and
+                (child.style['word_break'] == 'break-all' or (
+                    is_line_start and child.style['overflow_wrap'] == 'anywhere')))
             lines = []
-            resume_index = new_resume_index = 0
-            while new_resume_index is not None:
-                resume_index += new_resume_index
-                _, _, new_resume_index, width, _, _ = split_first_line(
-                    child_text[resume_index:].decode(), child.style, context, max_width,
-                    child.justification_spacing, is_line_start=is_line_start,
-                    minimum=True)
-                lines.append(width or None)
-                if first_line:
-                    break
+            if can_char_wrap:
+                for part in child_text.decode().split('\n'):
+                    lines.extend(min_content_line_widths(
+                        part, child.style, context,
+                        child.justification_spacing))
+            else:
+                resume_index = new_resume_index = 0
+                while new_resume_index is not None:
+                    resume_index += new_resume_index
+                    _, _, new_resume_index, width, _, _ = split_first_line(
+                        child_text[resume_index:].decode(), child.style, context,
+                        max_width, child.justification_spacing,
+                        is_line_start=is_line_start, minimum=True)
+                    lines.append(width or None)
+                    if first_line:
+                        break
             if first_line and new_resume_index:
                 # We only need the first line, break early.
                 current_line += lines[0] or 0

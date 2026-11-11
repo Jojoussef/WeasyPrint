@@ -1086,6 +1086,68 @@ def test_overflow_wrap_no_break_on_space():
     assert text2.text == '.png'
 
 
+@assert_no_logs
+def test_overflow_wrap_anywhere_table_performance(monkeypatch):
+    # Regression test for #3001.
+    from weasyprint.layout import preferred
+
+    calls = 0
+    original_split = preferred.split_first_line
+
+    def counting_split(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_split(*args, **kwargs)
+
+    monkeypatch.setattr(preferred, 'split_first_line', counting_split)
+
+    text = ' '.join(['abcdef'] * 500)
+    page, *_ = render_pages(f'''
+      <style>
+        body {{width: 10px; font-family: weasyprint; font-size: 20px}}
+        table {{overflow-wrap: anywhere}}
+      </style>
+      <table><tr><td>{text}</td></tr></table>''')
+    html, = page.children
+    body, = html.children
+    table_wrapper, = body.children
+    table, = table_wrapper.children
+    row_group, = table.children
+    tr, = row_group.children
+    td, = tr.children
+    assert td.width == 20
+    # Only called once during max-content pass; min-content uses single layout.
+    assert calls == 1
+
+
+@assert_no_logs
+@pytest.mark.parametrize(('style', 'text', 'expected_width'), [
+    ('overflow-wrap: anywhere', ' '.join(['\u00a0'] * 20), 20),
+    ('overflow-wrap: anywhere', ' '.join(['ab\u00a0cd'] * 20), 20),
+    ('overflow-wrap: anywhere; white-space: pre-line', '   \n   a', 20),
+    ('overflow-wrap: anywhere; white-space: pre-wrap', 'a   bc', 20),
+    ('overflow-wrap: anywhere; letter-spacing: 5px', '\u200b', 5),
+    ('overflow-wrap: anywhere; letter-spacing: 5px', 'abc def', 25),
+    ('overflow-wrap: anywhere; word-spacing: 20px', ' '.join(['a\u00a0b'] * 20), 50),
+    ('word-break: break-all', ' '.join(['abcdef'] * 20), 20),
+])
+def test_overflow_wrap_min_content_variants(style, text, expected_width):
+    page, *_ = render_pages(f'''
+      <style>
+        body {{width: 10px; font-family: weasyprint; font-size: 20px}}
+        table {{{style}}}
+      </style>
+      <table><tr><td>{text}</td></tr></table>''')
+    html, = page.children
+    body, = html.children
+    table_wrapper, = body.children
+    table, = table_wrapper.children
+    row_group, = table.children
+    tr, = row_group.children
+    td, = tr.children
+    assert td.width == expected_width
+
+
 def test_line_break_before_trailing_space():
     # Regression test for #1852.
     page, = render_pages('''

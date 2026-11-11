@@ -493,17 +493,76 @@ def split_first_line(text, style, context, max_width, justification_spacing,
         # memory of the last) prevents shaping characters (arabic, for
         # instance) from keeping their shape when wrapped on the next line with
         # pango layout. Maybe insert Unicode shaping characters in text?
-        layout.set_text(text)
-        pango.pango_layout_set_width(layout.layout, int(max_width * TO_UNITS))
-        pango.pango_layout_set_wrap(layout.layout, PANGO_WRAP_MODE['WRAP_CHAR'])
-        first_line, index = layout.get_first_line()
+        limit = (
+            max(64, int(max(0, max_width) / style['font_size'] * ratio * 2))
+            if style['font_size'] else len(text))
+        while True:
+            layout.set_text(text[:limit] if limit < len(text) else text)
+            pango.pango_layout_set_width(
+                layout.layout, int(max_width * TO_UNITS))
+            pango.pango_layout_set_wrap(
+                layout.layout, PANGO_WRAP_MODE['WRAP_CHAR'])
+            first_line, index = layout.get_first_line()
+            if index is not None or limit >= len(text):
+                break
+            limit *= 2
         resume_index = index or first_line.length
-        if resume_index >= len(text.encode()):
+        if limit >= len(text) and resume_index >= len(text.encode()):
             resume_index = None
 
     return first_line_metrics(
         first_line, text, layout, resume_index, space_collapse, style,
         hyphenated, style['hyphenate_character'])
+
+
+def min_content_line_widths(text, style, context, justification_spacing=0):
+    """Return line widths when breaking ``text`` at every char opportunity."""
+    layout = Layout(style, justification_spacing, max_width=0)
+    pango.pango_layout_set_width(layout.layout, 0)
+    pango.pango_layout_set_wrap(layout.layout, PANGO_WRAP_MODE['WRAP_CHAR'])
+    layout.set_text(text)
+    if text and style['overflow_wrap'] not in ('anywhere', 'break-word'):
+        attr_list = pango.pango_layout_get_attributes(layout.layout)
+        if attr_list == ffi.NULL:
+            attr_list = ffi.gc(
+                pango.pango_attr_list_new(), pango.pango_attr_list_unref)
+        attr = pango.pango_attr_insert_hyphens_new(False)
+        attr.start_index = 0
+        attr.end_index = len(text.encode())
+        pango.pango_attr_list_change(attr_list, attr)
+        pango.pango_layout_set_attributes(layout.layout, attr_list)
+    node = pango.pango_layout_get_lines_readonly(layout.layout)
+    logical_extents = ffi.new('PangoRectangle *')
+    letter_spacing = (
+        style['letter_spacing'] if style['letter_spacing'] != 'normal' else 0)
+    bytestring = None
+    zero_width_cache = {}
+    widths = []
+    while node != ffi.NULL:
+        line = ffi.cast('PangoLayoutLine *', node.data)
+        pango.pango_layout_line_get_extents(line, ffi.NULL, logical_extents)
+        width = logical_extents.width * FROM_UNITS
+        if width or not line.length:
+            width += letter_spacing
+        else:
+            if bytestring is None:
+                bytestring = text.encode().replace(b'\x00', b'')
+            chunk = bytestring[line.start_index:line.start_index + line.length]
+            if chunk == b' ':
+                width = letter_spacing
+            else:
+                if chunk not in zero_width_cache:
+                    _, _, _, cached_width, _, _ = split_first_line(
+                        chunk.decode(), style, context, max_width=0,
+                        justification_spacing=justification_spacing,
+                        is_line_start=True, minimum=True)
+                    zero_width_cache[chunk] = cached_width
+                width = zero_width_cache[chunk]
+        widths.append(width or None)
+        node = node.next
+    ffi.release(logical_extents)
+    layout.deactivate()
+    return widths
 
 
 def _font_style_cache_key(style, include_size=False):

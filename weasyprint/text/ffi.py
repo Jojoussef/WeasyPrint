@@ -320,6 +320,7 @@ ffi.cdef('''
     void pango_layout_line_get_extents (
         PangoLayoutLine *line, PangoRectangle *ink_rect, PangoRectangle *logical_rect);
     PangoLayoutLine * pango_layout_get_line_readonly (PangoLayout *layout, int line);
+    GSList * pango_layout_get_lines_readonly (PangoLayout *layout);
     const PangoLogAttr* pango_layout_get_log_attrs_readonly (
         PangoLayout* layout, gint* n_attrs);
 
